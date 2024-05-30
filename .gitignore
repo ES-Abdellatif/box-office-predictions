@@ -1,3 +1,4 @@
 # ignore test.csv file
 test.csv
 Archive
+.Rhistory
