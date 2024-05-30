@@ -1,0 +1,1248 @@
+---
+title: "Box office Revenue Predictions using Random Forest"
+author: "Emad Abdellatif"
+date: "May 22, 2024"
+output: 
+       html_document: 
+         df_print: default
+         highlight: tango
+         theme: readable
+         toc: yes
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+       message = FALSE,
+       warning = FALSE)
+```
+
+# Introduction
+
+1. Exploratory data analysis,  
+2. Feature engineering,  
+3. Treating missing values, and  
+4. Machine learning using random forest. 
+
+
+```{r}
+library(tidyverse) # Multiple packages
+library(plotly) # Interactive visualizations
+library(ggthemes) # Visualization themes
+library(viridis) # Color scales
+library(corrplot) # Correlation visualizations
+library(gridExtra) # Grids for visualizations
+library(VIM) # Visualizing missing values
+library(lubridate) # Working with dates
+library(randomForest) # Classification algorithm
+```
+
+Read in the train and test data sets and then bind the two sets using `bind_rows()` from the DPLYR package. We will do all feature engineering and data preparation on both data sets and then divide our data into train and test sets again later before creating our model.
+```{r}
+setwd("C:/Users/Emad Abdellatif/Desktop/Data Science Projects/Movies-Box-Office")
+train_data = read.csv('train.csv', na.strings=c("", '#N/A', '[]', '0'))
+test_data = read.csv('test.csv', na.strings=c("", '#N/A', '[]', '0'))
+
+full_data  <- bind_rows(train_data, test_data)
+```
+
+<br>
+
+Lets explore our data and see how it looks like. 
+```{r}
+glimpse(full_data)
+```
+With a quick observation, it looks like there are a few variables that could use some cleaning up. Because of this, we will use *regular expressions* and extract the appropriate information from them before using them in our model. 
+
+<br>
+
+# Exploratory Data Analysis
+
+Lets begin by plotting our existing variables `budget`, `runtime`, and `popularity` in order to see their relation to the variable we are trying to predict, revenue. 
+  
+```{r echo=FALSE, fig.show='hold', out.width=c('33%', '34%', '33%')}
+# Budget
+ggplot(full_data[1:3000,], aes(x = budget, y = revenue, color = budget)) +
+   geom_point() +
+  # scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by budget', x = 'Budget', y = 'Revenue (Millions)')
+
+# Runtime
+ggplot(full_data[1:3000,], aes(x = runtime, y = revenue, color = runtime)) +
+   geom_point() +
+  # scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by runtime', x = 'Runtime', y = 'Revenue (Millions)')
+
+# Popularity
+ggplot(full_data[1:3000,], aes(x = popularity, y = revenue, color = popularity)) +
+   geom_point() +
+ #  scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') +   
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by popularity', x = 'Popularity', y = 'Revenue (Millions)')
+```
+
+We can see some clear trends that an increase in budget and popularity tend to lead to higher revenue. Runtime seems to show this trend as well, although not as strongly. 
+
+<br>
+
+# Feature Engineering
+
+## Collection 
+The strings in `belongs_to_collection` are messy and contain information we do not need. Lets use regular expressions to extract the collection names from these strings.
+```{r}
+full_data$collection_name <- str_extract(full_data$belongs_to_collection, 
+            pattern = "(?<=name\\'\\:\\s{1}\\').+(?=\\'\\,\\s{1}\\'poster)")
+```
+
+Now that we have extracted the collection names lets check the biggest collections.
+```{r rows.print = 5}
+full_data[1:3000,] %>%
+   group_by(collection_name) %>%
+   summarise(movie_count = n()) %>%
+   arrange(desc(movie_count)) %>%
+   filter(!is.na(collection_name)) %>%
+   head(10) 
+```
+
+As each collection is fairly small we will engineer a new variable that consist of either being in a collection or not being in a collection.  
+```{r}
+full_data$collection[!is.na(full_data$belongs_to_collection)] <- 'Collection'
+full_data$collection[is.na(full_data$belongs_to_collection)] <- 'No collection'
+```
+
+Now lets plot our new variable to visualize how the two levels differ on revenue. 
+  
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot of collection
+ggplot(data = full_data[1:3000,], aes(x = collection, y=revenue, fill=collection)) +
+  # geom_boxplot(fill = c('grey50', 'red3')) + 
+   geom_boxplot() + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by collection', x = 'Collection', y = 'Total revenue (Millions)') 
+
+# Bar plot of collection
+ggplot(data = full_data[1:3000,], aes(x = collection, y = revenue, fill = collection)) +
+ #  stat_summary_bin(fun.y = median, geom = "bar", fill = c('grey50', 'red3')) + 
+   stat_summary_bin(fun.y = median, geom = "bar") +
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 25000000, 50000000, 70000000),
+                      labels = c('$0', '$25', '$50', '$70')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Median revenue by collection', x = 'Collection', y = 'Median revenue (Millions)')
+```
+
+On average, movies that are in collections seem to be getting higher revenues as we can see by looking at the box plot and bar plot. 
+
+<br> 
+
+## Main genre
+
+We now want to extract the first genre from the `genres` strings to get the main genre for each movie. First, we will create a vector with the genres we want to extract. Next, we will extract the genres and add them to a new variable called `main_genre.`
+```{r}
+genres_matching_point <- "Comedy|Horror|Action|Drama|Documentary|Science Fiction|
+              Crime|Fantasy|Thriller|Animation|Adventure|Mystery|War|Romance|Music|
+              Family|Western|History|TV Movie|Foreign"
+
+full_data$main_genre <- str_extract(full_data$genres, genres_matching_point)
+```
+
+Lets plot `main_genre` to find (1) how many movies there are per genre and (2) the median revenue by genre.  
+  
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Movie counts by main genre
+ggplot(full_data[1:3000,], aes(x = fct_infreq(main_genre), fill = main_genre)) + 
+   geom_bar() +
+ #  scale_fill_grey() + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0, end = 1) +
+   ylim(0, 1000) + 
+   coord_flip() +
+   theme_classic() +
+   theme(legend.position = 'none') + 
+   labs(title = 'Genre by count', x = 'Genre', y = 'count')
+
+# Median revenue by main genre  
+ggplot(full_data[1:3000,],  aes(x = fct_infreq(main_genre),  y=revenue, fill = main_genre)) + 
+   stat_summary_bin(fun.y = median, geom = "bar") + 
+ #  scale_fill_grey() + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0, end = 1) +       
+   scale_y_continuous(breaks = c(0, 25000000, 50000000, 70000000),
+                      labels = c('$0', '$25', '$50', '$70')) +
+   coord_flip() +
+   theme_classic() +
+   theme(legend.position = 'none') +  
+   labs(title = 'Median revenue by genre', x = 'Genre', y = 'Median revenue (Millions)') 
+```
+
+Here we can see that different genres seem to be making different revenues. Action movies seem to have the highest median revenue, followed by science fiction. One thing to note is that the median revenue for genres with few counts, such as TV Movie, might be over-/underestimations due to small sample sizes. 
+
+<br>
+
+## Production company id
+
+We want to extract the first (and main) production company id from `production_companies` and create the new variable `prod_comp_id.`
+```{r}
+full_data$prod_comp_id <- str_extract(full_data$production_companies, 
+                                      pattern = "([0-9]+)")
+```
+
+Lets plot how this variable and see how it affects revenue.  
+
+```{r fig.height=3.5, fig.width=5, fig.align = 'center', echo=FALSE}
+# Make 'prod_comp_id' an integer
+full_data$prod_comp_id <- as.integer(full_data$prod_comp_id)
+
+# Create a scatter plot: revenue by prod_comp_id
+ggplot(full_data[1:3000,], aes(x = prod_comp_id, y = revenue, color=prod_comp_id)) +
+       geom_point() +
+      # scale_color_gradient(low = "grey10", high = "grey75") +
+       scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+       geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+       scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                 labels = c('$0', '$500', '$1000', '$1500')) +
+       theme_classic() + 
+       theme(legend.position = 'none') + 
+       labs(title = 'Revenue by production company id', x = 'Production company id', y = 'Revenue (Millions)')
+```
+
+Production companies with lower numbered id's seem to be making more revenue compared to the ones with higher id's. Lets check the correlation to confirm this. 
+
+```{r}
+cor(full_data$revenue, full_data$prod_comp_id, use = 'complete.obs')
+```
+
+There seems to be a *small* negative correlation present. 
+
+<br>
+
+## Top production companies
+
+Lets extract the main production company name from `production_companies`.
+```{r}
+full_data$prod_comp_name <- gsub('(^\\[\\{\'name\'\\:\\s\'|\'\\,\\s\'id.*)', '',
+                                 full_data$production_companies)
+```
+
+Check the top production companies ordered by number of movies produced.
+```{r rows.print = 5}
+full_data[1:3000,] %>%
+   group_by(prod_comp_name) %>%
+   summarise(movie_count = n()) %>%
+   arrange(desc(movie_count)) %>%
+   filter(!is.na(prod_comp_name)) %>%
+   head(10) 
+```
+
+We will create a new variable called `top_prod_comp` (top production companies). We will create a separate category for each production company that has produced at least 60 movies that are present in our data set. All other production companies, including NAs, get put into an 'other' category.
+```{r}
+full_data$top_prod_comp[full_data$prod_comp_name=='Universal Pictures'] <- 'Universal Pictures'
+full_data$top_prod_comp[full_data$prod_comp_name=='Paramount Pictures'] <- 'Paramount Pictures'
+full_data$top_prod_comp[full_data$prod_comp_name=='Twentieth Century Fox Film Corporation'] <- 'Twentieth Century Fox Film Corporation'
+full_data$top_prod_comp[full_data$prod_comp_name=='Columbia Pictures'] <- 'Columbia Pictures'
+full_data$top_prod_comp[full_data$prod_comp_name=='New Line Cinema'] <- 'New Line Cinema'
+full_data$top_prod_comp[full_data$prod_comp_name=='Warner Bros.'] <- 'Warner Bros.'
+full_data$top_prod_comp[full_data$prod_comp_name=='Walt Disney Pictures'] <- 'Walt Disney Pictures'
+
+full_data$top_prod_comp[is.na(full_data$top_prod_comp)] <- 'Other'
+```
+
+Lets take a look at the effects of this variable on revenue.  
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot of revenue by 'top_prod_comp'
+ggplot(full_data[1:3000,], aes(x = top_prod_comp, y = revenue, fill=top_prod_comp)) +
+   geom_boxplot() +
+ #  scale_fill_brewer(palette = 'RdGy') +
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0, end = 1) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0M', '$500', '$1000', '$1500')) +
+   coord_flip() +
+   theme_classic() + 
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by top production companies',
+        x = 'Top production companies', y = 'Revenue (Millions)')
+
+# Bar plot of median revenue by top_prod_comp
+ggplot(full_data[1:3000,], aes(x = top_prod_comp, y = revenue, fill = top_prod_comp)) +
+   stat_summary_bin(fun.y = median, geom = "bar") + 
+ #  scale_fill_brewer(palette = 'RdGy') +
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0, end = 1) +
+   scale_y_continuous(breaks = c(0, 50000000, 100000000, 150000000),
+                      labels = c('$0', '$50', '$100','$150')) +
+   coord_flip() + 
+   theme_classic() + 
+   theme(legend.position = 'none') + 
+   labs(title = 'Median revenue by top production companies', 
+        x = 'Top production companies', y = 'Median revenue (Millions)')
+```
+
+Here we can see that the average revenue for a lot of the top production companies is higher than the 'other' production companies. 
+
+<br> 
+
+## Production company size
+
+Now, lets move on to create `prod_comp_size` (production company size -- *big producer* v. *small producer*). We will assign the production companies that have at least 60 movies each as big producers and all the rest as small producers. We will assume that all NAs are small producers. 
+```{r}
+full_data$prod_comp_size[full_data$prod_comp_name=='Universal Pictures'] <- 'Big producer' 
+full_data$prod_comp_size[full_data$prod_comp_name=='Paramount Pictures'] <- 'Big producer' 
+full_data$prod_comp_size[full_data$prod_comp_name=='Twentieth Century Fox Film Corporation'] <- 'Big producer'
+full_data$prod_comp_size[full_data$prod_comp_name=='Columbia Pictures'] <- 'Big producer'
+full_data$prod_comp_size[full_data$prod_comp_name=='New Line Cinema'] <- 'Big producer'
+full_data$prod_comp_size[full_data$prod_comp_name=='Warner Bros.'] <- 'Big producer'
+full_data$prod_comp_size[full_data$prod_comp_name=='Walt Disney Pictures'] <- 'Big producer'
+
+full_data$prod_comp_size[is.na(full_data$prod_comp_size)] <- 'Small producer'
+```
+
+Lets see how our new variable affects revenue.  
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot of revenue by 'prod_comp_size'
+ggplot(full_data[1:3000,], aes(x = prod_comp_size, y=revenue, fill=prod_comp_size)) +
+ #  geom_boxplot(fill = c('grey50', 'red3')) + 
+   geom_boxplot() + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by production company size', 
+        x = 'Production company size', y = 'Revenue (Millions)') 
+
+# Bar plot of median revenue by prod_comp_size
+ggplot(full_data[1:3000,], aes(x = prod_comp_size, y=revenue, fill=prod_comp_size)) +
+ #  stat_summary_bin(fun.y = median, geom = "bar", fill = c('grey50', 'red3')) + 
+   stat_summary_bin(fun.y = median, geom = "bar") +    
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 25000000, 50000000, 70000000),
+                      labels = c('$0', '$25', '$50', '$70')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Median revenue by production company size', 
+        x = 'Production company size', y = 'Median revenue (Millions)')
+```
+
+Again, we can see that the big production companies are, on average, making more than the smaller production companies. 
+
+<br>
+
+## Top production countries
+
+Lets extract the country abbreviations from the messy strings in `production_countries`.
+```{r}
+full_data$prod_country <- str_extract(string = full_data$production_countries, 
+                                      pattern = "[:upper:]+")
+```
+
+Check the top countries by number of movies produced.
+```{r rows.print = 5}
+full_data[1:3000,] %>%
+   group_by(prod_country) %>%
+   summarise(movie_count = n()) %>%
+   arrange(desc(movie_count)) %>%
+   filter(!is.na(prod_country)) %>%
+   head(10) 
+```
+
+Separate into top production countries (criteria: 100+ movies) and 'other'.
+```{r}
+full_data$top_prod_country[full_data$prod_country=='US'] <- 'United States'
+full_data$top_prod_country[full_data$prod_country=='GB'] <- 'Great Britain'
+full_data$top_prod_country[full_data$prod_country=='FR'] <- 'France'
+
+full_data$top_prod_country[is.na(full_data$top_prod_country)] <- 'Other'
+```
+
+Plot our new `top_prod_country` variable.  
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot
+ggplot(full_data[1:3000,], aes(x = top_prod_country, y=revenue, fill=top_prod_country)) +
+   geom_boxplot() +
+ #  scale_fill_brewer(palette = 'RdGy') + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0, end = 1) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title='Revenue by production country', x='Production country', y='Revenue (Millions)') 
+
+# Bar plot 
+ggplot(full_data[1:3000,], aes(x=top_prod_country, y=revenue, fill=top_prod_country)) +
+   stat_summary_bin(fun.y = median, geom = "bar") + 
+ #  scale_fill_brewer(palette = 'RdGy') + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0, end = 1) +
+   scale_y_continuous(breaks = c(0, 10000000, 20000000),
+                      labels = c('$0', '$10', '$20')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Median revenue by top production countries', 
+        x = 'Top production countries', y = 'Median revenue (Millions)')
+```
+
+The U.S. and Great Britain seem to, on average, be getting more revenue than the countries that are not among the top production countries. 
+
+<br>
+
+## IMDB id
+
+We will now extract the IMDb number from the `IMDb_id` string in order to see if this variable affects revenue. There will likely not be any correlation with this and revenue, but we will plot and explore this to make sure. 
+```{r}
+full_data$imdb_id_2 <- str_extract(full_data$imdb_id, '[0-9]+')
+```
+
+Plot this new variable.  
+
+```{r fig.height=3.5, fig.width=5, fig.align = 'center', echo=FALSE}
+# Set imdb_id_2 as an integer
+full_data$imdb_id_2 <- as.integer(full_data$imdb_id_2 )
+
+# Create scatter plot of revenue by imdb_id_2
+ggplot(full_data[1:3000,], aes(x = imdb_id_2, y = revenue, color = imdb_id_2)) + 
+       geom_point() +
+     #  scale_color_gradient(low = "grey10", high = "grey75") +
+       scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+       scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                          labels = c('$0', '$500', '$1000', '$1500')) +
+       scale_x_continuous(breaks = c(0, 2000000, 4000000, 6000000),
+                          labels = c('0', '2 000 0000', '4 000 000', '6 000 000')) +
+       geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+       theme_classic() + 
+       theme(legend.position = 'none') + 
+       labs(title = 'Revenue by IMDb id', x = 'IMDb id', y = 'Revenue (Millions)')
+```
+
+There does not seem to be any trend between IMDb id and revenue. Lets check the correlation to make sure. 
+```{r}
+cor(full_data$revenue, full_data$imdb_id_2, use = 'complete.obs')
+```
+
+This confirms that there is next to no correlation and that it is probably best to not include this variable in our prediction model. 
+
+<br>
+
+## Language
+
+Lets take a look at the most common original languages for our movies. 
+```{r rows.print = 5}
+full_data[1:3000,] %>%
+   group_by(original_language) %>%
+   summarise(movie_count = n()) %>%
+   arrange(desc(movie_count)) %>%
+   filter(!is.na(original_language)) %>%
+   head(10) 
+```
+
+Since the absolute majority of the movies are English, with the second most popular language being French with 78 movies, we will create the variable `language` with levels English versus Non-English.
+```{r}
+full_data$language[full_data$original_language=='en'] <- 'English'
+full_data$language[is.na(full_data$language)] <- 'Non-English'
+```
+
+Now lets plot our new variable to see how it affects revenue.  
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot. 
+ggplot(full_data[1:3000,], aes(x = language, y = revenue, fill = language)) +
+ #  geom_boxplot(fill = c('grey50', 'red3')) + 
+   geom_boxplot() + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by language', x='Language', y='Revenue (Millions)')
+
+# Bar plot. 
+ggplot(full_data[1:3000,], aes(x = language, y = revenue, fill=language)) +
+  # stat_summary_bin(fun.y = median, geom = "bar", fill = c('grey50', 'red3')) + 
+   stat_summary_bin(fun.y = median, geom = "bar") +    
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 10000000, 20000000),
+                      labels = c('$0', '$10', '$20')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Median revenue by language', x = 'Language', y = 'Median revenue (Millions)')
+```
+
+Seems like English-language movies make on average about 5 times the revenue of non-English language movies.
+
+<br>
+
+## Year, quarter, month, week, and weekday released
+
+Now we will create 5 new variables: (1) `year_released`, (2) `quarter_released`, (3) `month_released`, (4) `week_released`, and (5) `weekday_released.`
+  
+Before creating our variables we will fix missing values for `release_date` so
+that we do not need to do so for each created variable later.
+
+Lets see which rows have missing values for `release_date` and look up the titles and runtimes. 
+```{r results='hold'}
+which(is.na(full_data$release_date))
+
+full_data[3829, c('title', 'runtime')]
+```
+
+I found online that the movie was released 3/20/2001 so I'll add this information.
+```{r}
+full_data$release_date[3829] <- '3/20/01'
+```
+
+
+Our *release date* variable does not contain the century for the year the movies were released. Hence, we need to set the cut off value for century break as '20' (i.e., 1920). We will do this so that old movies (from 1921-1968) don't erroneously get classified as being from 20th century.
+```{r}
+full_data$release_date_mod <- parse_date_time2(full_data$release_date, "mdy",
+                                               cutoff_2000 = 20)
+```
+
+Create year, quarter, month, week, and weekday released using the LUBRIDATE package.
+```{r}
+full_data$year_released <- ymd(full_data$release_date_mod) %>% 
+   lubridate::year()  # Grab year.
+
+full_data$quarter_released <- ymd(full_data$release_date_mod) %>%
+   lubridate::quarter()  # Grab quarter.
+
+full_data$month_released <- ymd(full_data$release_date_mod) %>% 
+   lubridate::month(label = TRUE, abbr = FALSE)  # Grab month.
+
+full_data$week_released <- ymd(full_data$release_date_mod) %>%
+   lubridate::week()  # Grab week.
+
+full_data$weekday_released <- ymd(full_data$release_date_mod) %>%
+   lubridate::wday(label = TRUE, abbr = FALSE)  # Grab weekday.
+```
+
+Lets graph these variables to see how they affect revenue.  
+
+```{r fig.height=6, fig.width=9, echo=FALSE}
+# Year released
+year_plot <- ggplot(full_data[1:3000,], aes(x = year_released, y = revenue,
+                                        color=year_released)) +
+   geom_point() +
+  # scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') + 
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_light() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by year released', x = 'Release year', y = 'Revenue (Millions)')
+
+# Quarter released
+quarter_plot <- ggplot(full_data[1:3000,], aes(x = factor(quarter_released), 
+                                  y = revenue, fill = factor(quarter_released))) +
+   stat_summary_bin(fun.y = median, geom = "bar") + 
+  # scale_fill_grey() +
+   scale_fill_viridis(begin = 0, end = .95, option = 'D', discrete = TRUE) + 
+   scale_y_continuous(breaks = c(0, 10000000, 20000000),
+                      labels = c('$0', '$10', '$20')) +
+   theme_light() +
+   theme(legend.position = 'none', axis.text.x = element_text(angle = 90)) +
+   labs(title='Revenue by quarter released', x='Release quarter', y='Median revenue (Millions)')
+
+# Month released
+month_plot <- ggplot(full_data[1:3000,], aes(x = month_released, y = revenue,
+                                        fill = month_released)) +
+   stat_summary_bin(fun.y = median, geom = "bar") + 
+  # scale_fill_grey() +
+   scale_fill_viridis(begin = 0, end = .95, option = 'D', discrete = TRUE) + 
+   scale_y_continuous(breaks = c(0, 10000000, 20000000, 30000000),
+                      labels = c('$0', '$10', '$20', '$30')) +
+   theme_light() +
+   theme(legend.position = 'none', axis.text.x = element_text(angle = 45)) +
+   labs(title='Median revenue by month released', x='Release month', y='Median revenue (Millions)')
+
+# Week released
+week_plot <- ggplot(full_data[1:3000,], aes(x = factor(week_released), 
+                                   y = revenue, fill = factor(week_released))) +
+   stat_summary_bin(fun.y = median, geom = "bar") +
+ #  scale_fill_grey() +
+   scale_fill_viridis(begin = 0, end = .95, option = 'D', discrete = TRUE) + 
+   scale_y_continuous(breaks = c(0, 20000000, 40000000, 60000000),
+                      labels = c('$0', '$20', '$40', '$60')) +
+   theme_light() +
+   theme(legend.position = 'none', axis.text.x = element_text(angle = 90)) +
+   labs(title='Revenue by week released', x='Release week', y='Median revenue (Millions)')
+
+# Weekday released
+weekday_plot <- ggplot(full_data[1:3000,], aes(x = weekday_released, y = revenue,
+                                        fill = weekday_released)) +
+   stat_summary_bin(fun.y = median, geom = "bar") + 
+ #  scale_fill_grey() +
+   scale_fill_viridis(begin = 0, end = .95, option = 'D', discrete = TRUE) + 
+   scale_y_continuous(breaks = c(0, 10000000, 20000000, 30000000),
+                      labels = c('$0', '$10', '$20', '$30')) +
+   theme_light() +
+   theme(legend.position = 'none', axis.text.x = element_text(angle = 45)) +
+   labs(title = 'Revenue by weekday released', x='Release day', y='Median revenue (Millions)')
+
+# Create a grid of the plots.
+grid.arrange(year_plot, quarter_plot, month_plot, weekday_plot, week_plot,
+             layout_matrix = rbind(c(1, 2, 3),
+                                   c(5, 5, 4)))
+```
+
+Here we can see that: 
+
+* The year plot seems to indicate revenue has been increasing over the years.
+* Movies being released in June, July and December seem to be getting higher revenues. This is in line with what one would believe as a lot of blockbuster movies are released during the summer, while a lot of movies that are trying to compete for the Oscars are released in December.
+* Movies that are released on Wednesdays seem to be getting somewhat higher revenues as well. 
+
+<br>
+
+## Tagline presence
+
+Next we will feature engineer a `tagline_presence` variable by simply categorizing whether a movie has a tagline or not. 
+```{r}
+full_data$tagline_presence[is.na(full_data$tagline)] <- 'No tagline'
+full_data$tagline_presence[is.na(full_data$tagline_presence)] <- 'Tagline'
+```
+
+Next, lets create a bar plot of `tagline_presence` against `revenue`.  
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot
+ggplot(full_data[1:3000,], aes(x = tagline_presence, y = revenue, fill = tagline_presence)) +
+ #  geom_boxplot(fill = c('grey50', 'red3')) + 
+   geom_boxplot() +    
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by tagline presence', x = 'Tagline', y = 'Revenue (Millions)')
+
+# Bar plot
+ggplot(full_data[1:3000,], aes(x = tagline_presence, y=revenue, fill=tagline_presence)) +
+ #  stat_summary_bin(fun.y = median, geom = "bar", fill = c('grey50', 'red3')) + 
+   stat_summary_bin(fun.y = median, geom = "bar") +    
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 10000000, 20000000, 30000000),
+                      labels = c('$0', '$10', '$20', '$30')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title='Median revenue by tagline presence', x='Tagline', y='Median revenue (Millions)')
+```
+
+Seems like the median for movies with taglines is about 10 times that of movies without a tagline. 
+
+<br>
+
+## Homepage presence
+
+Now we will create the `homepage_presence` variable by categorizing if the movies have a homepage or not. 
+```{r}
+full_data$homepage_presence[is.na(full_data$homepage)] <- 'No homepage'
+full_data$homepage_presence[is.na(full_data$homepage_presence)] <- 'Homepage'
+```
+
+Now lets plot this new feature.  
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+# Box plot
+ggplot(full_data[1:3000,], aes(x = homepage_presence, y=revenue, fill=homepage_presence)) +
+ #  geom_boxplot(fill = c('grey50', 'red3')) + 
+   geom_boxplot() + 
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by homepage presence', x = 'Homepage', y = 'Revenue (Millions)')
+
+# Bar plot
+ggplot(full_data[1:3000,], aes(x = homepage_presence, y=revenue, fill=homepage_presence)) +
+  # stat_summary_bin(fun.y = median, geom = "bar", fill = c('grey50', 'red3')) + 
+   stat_summary_bin(fun.y = median, geom = "bar") +    
+   scale_fill_viridis(discrete = TRUE, option = 'D', begin = 0.3, end = .8) +
+   scale_y_continuous(breaks = c(0, 10000000, 20000000, 30000000),
+                      labels = c('$0', '$10', '$20', '$30')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title='Median revenue by homepage presence', x='Homepage', y='Median revenue (Millions)')
+```
+
+Movies with homepages seem to be making on average 3 times as much as movies without a homepage.
+
+<br>
+
+## Gender of cast & crew
+
+We will now create new variables to see how gender of cast and crew affect revenue. 
+```{r}
+# Total cast count and by gender
+full_data$number_of_cast <- str_count(full_data$cast, 'name')
+full_data$female_cast <- str_count(full_data$cast, ('gender\'\\:\\s1'))
+full_data$male_cast <- str_count(full_data$cast, ('gender\'\\:\\s2'))
+full_data$unspecified_cast <- str_count(full_data$cast, ('gender\'\\:\\s0'))
+
+# Total crew count and by gender
+full_data$number_of_crew <- str_count(full_data$crew, 'name')
+full_data$female_crew <- str_count(full_data$crew, ('gender\'\\:\\s1'))
+full_data$male_crew <- str_count(full_data$crew, ('gender\'\\:\\s2'))
+full_data$unspecified_crew <- str_count(full_data$crew, ('gender\'\\:\\s0'))
+```
+
+Lets plot this.  
+
+```{r out.width=c('33%', '34%', '33%'), fig.show='hold', echo=FALSE}
+# Revenue by number_of_cast
+ggplot(full_data[1:3000,], aes(x = number_of_cast, y = revenue, color = number_of_cast)) +
+   geom_point() +
+   scale_color_gradient(low = "grey10", high = "grey75") +
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by cast count', x = 'Cast count', y = 'Revenue (Millions)')
+
+# Revenue by female_cast
+ggplot(full_data[1:3000,], aes(x = female_cast, y = revenue, color=female_cast)) +
+   geom_point() +
+ #  scale_color_gradient(low = "brown4", high = "red") +
+   scale_color_viridis(begin = 0.3, end = .95, option = 'A') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by female cast count', x = 'Female cast count', y = 'Revenue (Millions)') 
+
+# Revenue by male_cast
+ggplot(full_data[1:3000,], aes(x = male_cast, y = revenue, color = male_cast)) +
+   geom_point() +
+ #  scale_color_gradient(low = "midnightblue", high = "aquamarine") +
+   scale_color_viridis(begin = 0.2, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by male cast count', x = 'Male cast count', y = 'Revenue (Millions)')
+
+# Revenue by number_of_crew
+ggplot(full_data[1:3000,], aes(x = number_of_crew, y = revenue, color = number_of_crew)) +
+   geom_point() +
+   scale_color_gradient(low = "grey10", high = "grey75") +
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by Crew count', x = 'Crew count', y = 'Revenue (Millions)')
+
+# Revenue by female_crew
+ggplot(full_data[1:3000,], aes(x = female_crew, y = revenue, color=female_crew)) +
+   geom_point() +
+ #  scale_color_gradient(low = "brown4", high = "red") +
+   scale_color_viridis(begin = 0.3, end = .95, option = 'A') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by female crew count', x = 'Female crew count', y = 'Revenue (Millions)')
+
+# Revenue by male_crew
+ggplot(full_data[1:3000,], aes(x = male_crew, y = revenue, color = male_crew)) + 
+   geom_point() +
+ #  scale_color_gradient(low = "midnightblue", high = "aquamarine") +
+   scale_color_viridis(begin = 0.2, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by male crew count', x = 'Male crew count', y = 'Revenue (Millions)')
+```
+
+Here we can see the distribution in revenue by gender for cast and crew. There seems to be a quite clear trend that the more cast and crew the movie has, the higher the revenue. 
+
+<br>
+
+## Number of...
+
+Now we will create multiple new features by extracting the number of occurrences of certain variables within a string. We will extract the number of: (1) **genres**, (2) **production companies**, (3) **production countries**, (4) **spoken languages**, and (5) **keywords**. We will do this by counting the occurrence of 'name' in each string.
+```{r}
+full_data$number_of_genres <- str_count(full_data$genres, 'name')
+full_data$number_of_prod_companies <- str_count(full_data$production_companies, 'name')
+full_data$number_of_prod_countries <- str_count(full_data$production_countries, 'name')
+full_data$number_of_spoken_languages <- str_count(full_data$spoken_languages, 'name')
+full_data$number_of_keywords <- str_count(full_data$Keywords, 'name')
+```
+
+Now lets plot these variables.  
+
+```{r out.width=c('33%', '34%', '33%'), fig.show='hold', echo=FALSE}
+# number_of_genres
+ggplot(full_data[1:3000,], aes(x = as.factor(number_of_genres), y = revenue,
+                               fill=number_of_genres)) +
+   geom_boxplot() + 
+ #  scale_fill_gradient(low = "grey40", high = "red3") + 
+   scale_fill_viridis(begin = 0, end = .95, option = 'D') + 
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Genre count by revenue', x = 'Genre count', y = 'Revenue (Millions)')
+
+# number_of_prod_companies
+ggplot(full_data[1:3000,],  aes(x = as.factor(number_of_prod_companies), 
+                                y = revenue, fill = number_of_prod_companies)) +
+   geom_boxplot() + 
+ #  scale_fill_gradient(low = "grey40", high = "red3") + 
+   scale_fill_viridis(begin = 0, end = .95, option = 'D') + 
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title='Prod. company count by revenue', x='Production company count', y='Revenue (Millions)')
+
+# number_of_prod_countries
+ggplot(full_data[1:3000,], aes(x = as.factor(number_of_prod_countries), y=revenue, 
+                                  fill = number_of_prod_countries)) +
+   geom_boxplot() + 
+ #  scale_fill_gradient(low = "grey40", high = "red3") + 
+   scale_fill_viridis(begin = 0, end = .95, option = 'D') + 
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title='Prod. country count by revenue', x='Production country count', y='Revenue (Millions)')
+
+# number_of_spoken_languages
+ggplot(full_data[1:3000,], aes(x = as.factor(number_of_spoken_languages), 
+                               y = revenue, fill = number_of_spoken_languages)) +
+   geom_boxplot() +
+ # scale_fill_gradient(low = "grey40", high = "red3") + 
+   scale_fill_viridis(begin = 0, end = .95, option = 'D') + 
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title='Language count by revenue', x='Spoken languages count', y='Revenue (Millions)')
+
+# number_of_keywords
+ggplot(full_data[1:3000,], aes(x = number_of_keywords, y=revenue, color=number_of_keywords)) +
+   geom_point() +
+ #  scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by keyword count', x = 'Keyword count', y = 'Revenue (Millions)')
+```
+
+Here we can see that: 
+
+* The more genres a movie has, the higher the median revenue. 
+* The more production companies a movie has, the higher the revenue, up to 6 production companies. A higher number than that seems to have more volatile results. This might be explained by smaller sample sizes. 
+* There seems to be no clear trend between number of production countries and revenue. 
+* There seems like there is no clear trend for number of spoken languages either.
+* There is a trend between more keywords and higher revenue. 
+
+Lets plot these variables on a correlation plot. 
+
+```{r echo=FALSE, fig.height=4}
+corrplot.mixed(
+       corr = cor(full_data[c('revenue','number_of_genres', 'number_of_prod_companies', 'number_of_prod_countries', 'number_of_spoken_languages', 'number_of_keywords')], use = 'complete.obs'), 
+       tl.col = "black",  
+       upper = "ellipse") 
+```
+
+`number_of_spoken_languages` and `number_of_prod_countries` show no correlation with `revenue.` We have 2 options: either remove these variables or try to see if we can make the patterns stronger by bunching levels together. I tried both these options and got better results by removing the variables from the model. 
+
+<br>
+
+## Length of...
+
+We will now create 3 additional variables, (1) `title_length`, (2) `overview_length`, and (3) `tagline_length` by extracting the lengths of the strings of the variables. 
+```{r}
+full_data$title_length <- str_length(full_data$title)
+full_data$tagline_length <- str_length(full_data$tagline)
+full_data$overview_length <- str_length(full_data$overview)
+```
+
+Lets plot these variables.  
+
+```{r out.width=c('33%', '34%', '33%'), fig.show='hold', echo=FALSE}
+# title_length
+ggplot(full_data[1:3000,], aes(x = title_length, y = revenue, color = title_length)) +
+   geom_point() +
+ # scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by title length', x = 'Title length', y = 'Revenue (Millions)')
+
+# tagline_length
+ggplot(full_data[1:3000,], aes(x=tagline_length, y=revenue, color=tagline_length)) +
+   geom_point() +
+ #  scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by tagline length', x = 'Tagline length', y = 'Revenue (Millions)')
+
+# overview_length
+ggplot(full_data[1:3000,], aes(x=overview_length, y=revenue, color=overview_length))+
+   geom_point() +
+ #  scale_color_gradient(low = "grey10", high = "grey75") +
+   scale_color_viridis(begin = 0, end = .95, option = 'D') + 
+   geom_smooth(method = 'lm', color = 'red3', fill = 'red3') +
+   scale_y_continuous(breaks = c(0, 500000000, 1000000000, 1500000000),
+                      labels = c('$0', '$500', '$1000', '$1500')) +
+   theme_classic() +
+   theme(legend.position = 'none') +
+   labs(title = 'Revenue by overview length', x = 'Overview length', y = 'Revenue (Millions)')
+```
+
+The correlation between these variables and revenue seem small. Lets take a look at what the actual correlations are. 
+
+```{r results='hold'}
+cor(full_data$revenue, full_data$title_length, use = 'complete.obs')
+cor(full_data$revenue, full_data$tagline_length, use = 'complete.obs')
+cor(full_data$revenue, full_data$overview_length, use = 'complete.obs')
+```
+
+Here we can see that there is a weak correlation between title length and tagline length and revenue. There is no correlation between overview length and revenue so it is probably best to not include the variable in our model.
+
+<br>
+
+# Last data preparations
+
+## Subsetting the data
+
+Lets first create a subset containing all the variables we want to keep for our machine learning model.
+```{r}
+full_data_subset <- subset(full_data, 
+                     select = c(popularity, runtime, budget, prod_comp_size, 
+                     top_prod_comp, prod_comp_id, main_genre, language, collection,
+                     top_prod_country, tagline_presence, homepage_presence,
+                     year_released, quarter_released, month_released, week_released,
+                     weekday_released, number_of_keywords, number_of_prod_companies,
+                     number_of_genres, title_length, tagline_length, number_of_cast,
+                     number_of_crew, female_cast, male_cast, female_crew, male_crew,
+                   # number_of_prod_countries, number_of_spoken_languages,
+                   # imdb_id_2, overview_length, unspecified_cast, unspecified_crew,
+                      revenue))
+```
+
+<br>
+
+## What missing values do we have?
+
+We will now begin our process of **treating missing values** in our data set. 
+
+Lets first visualize the missing values in our data by using `aggr()` from the VIM package.
+```{r out.width=c('100%')}
+aggr(full_data_subset, sortVars = TRUE, prop = FALSE, cex.axis = .35, 
+     numbers = TRUE, col = c('grey99','red'))
+```
+
+<br>
+
+## Treating missing values
+
+For simplicity sake and because most our variables have few missing values, we will use the mean and mode to treat most of our NAs. We will impute and predict the missing values for `budget` later as it has a lot of missing values. 
+```{r}
+full_data_subset$runtime[is.na(full_data_subset$runtime)] <- mean(full_data_subset$runtime, na.rm = TRUE)
+full_data_subset$number_of_cast[is.na(full_data_subset$number_of_cast)] <- mean(full_data_subset$number_of_cast, na.rm = TRUE)
+full_data_subset$number_of_crew[is.na(full_data_subset$number_of_crew)] <- mean(full_data_subset$number_of_crew, na.rm = TRUE)
+full_data_subset$tagline_length[is.na(full_data_subset$tagline_length)] <- mean(full_data_subset$tagline_length, na.rm = TRUE)
+full_data_subset$title_length[is.na(full_data_subset$title_length)] <- mean(full_data_subset$title_length, na.rm = TRUE)
+full_data_subset$female_cast[is.na(full_data_subset$female_cast)] <- mean(full_data_subset$female_cast, na.rm = TRUE)
+full_data_subset$male_cast[is.na(full_data_subset$male_cast)] <- mean(full_data_subset$male_cast, na.rm = TRUE)
+full_data_subset$female_crew[is.na(full_data_subset$female_crew)] <- mean(full_data_subset$female_crew, na.rm = TRUE)
+full_data_subset$male_crew[is.na(full_data_subset$male_crew)] <- mean(full_data_subset$male_crew, na.rm = TRUE)
+full_data_subset$main_genre[is.na(full_data_subset$main_genre)] <- "Drama"
+full_data_subset$number_of_genres[is.na(full_data_subset$number_of_genres)] <- 1
+full_data_subset$number_of_prod_companies[is.na(full_data_subset$number_of_prod_companies)] <- 1
+full_data_subset$number_of_keywords[is.na(full_data_subset$number_of_keywords)] <- 0
+full_data_subset$prod_comp_id[is.na(full_data_subset$prod_comp_id)] <- 10000
+```
+
+
+```{r, echo=FALSE}
+# Revenue
+full_data_subset[16, 'revenue'] <- 192864
+full_data_subset[313, 'revenue'] <- 12000000
+full_data_subset[451, 'revenue'] <- 12000000
+full_data_subset[1865, 'revenue'] <- 25000000
+
+# Budget
+full_data_subset[90, 'budget'] <- 30000000
+full_data_subset[118, 'budget'] <- 60000000
+full_data_subset[149, 'budget'] <- 18000000
+full_data_subset[464, 'budget'] <- 20000000
+full_data_subset[470, 'budget'] <- 13000000
+full_data_subset[513, 'budget'] <- 930000
+full_data_subset[797, 'budget'] <- 8000000
+full_data_subset[819, 'budget'] <- 90000000
+full_data_subset[850, 'budget'] <- 90000000
+full_data_subset[1007, 'budget'] <- 2
+full_data_subset[1112, 'budget'] <- 7500000
+full_data_subset[1131, 'budget'] <- 4300000
+full_data_subset[1359, 'budget'] <- 10000000
+full_data_subset[1542, 'budget'] <- 1
+full_data_subset[1570, 'budget'] <- 15800000
+full_data_subset[1571, 'budget'] <- 4000000
+full_data_subset[1714, 'budget'] <- 46000000
+full_data_subset[1721, 'budget'] <- 17500000
+full_data_subset[1885, 'budget'] <- 12
+full_data_subset[2091, 'budget'] <- 10
+full_data_subset[2268, 'budget'] <- 17500000
+full_data_subset[2491, 'budget'] <- 6
+full_data_subset[2602, 'budget'] <- 31000000
+full_data_subset[2612, 'budget'] <- 15000000
+full_data_subset[2696, 'budget'] <- 10000000
+full_data_subset[2801, 'budget'] <- 10000000
+full_data_subset[335, 'budget'] <- 2
+full_data_subset[348, 'budget'] <- 12
+full_data_subset[470, 'budget'] <- 13000000
+full_data_subset[513, 'budget'] <- 1100000
+full_data_subset[640, 'budget'] <- 6
+full_data_subset[696, 'budget'] <- 1
+full_data_subset[797, 'budget'] <- 8000000
+full_data_subset[850, 'budget'] <- 1500000
+full_data_subset[1199, 'budget'] <- 5
+full_data_subset[1282, 'budget'] <- 9
+full_data_subset[1347, 'budget'] <- 1
+full_data_subset[1755, 'budget'] <- 2
+full_data_subset[1801, 'budget'] <- 5
+full_data_subset[1918, 'budget'] <- 592
+full_data_subset[2033, 'budget'] <- 4
+full_data_subset[2118, 'budget'] <- 344
+full_data_subset[2252, 'budget'] <- 130
+full_data_subset[2256, 'budget'] <- 1
+full_data_subset[2696, 'budget'] <- 10000000
+full_data_subset[3033, 'budget'] <- 250
+full_data_subset[3051, 'budget'] <- 50
+full_data_subset[3084, 'budget'] <- 337
+full_data_subset[3224, 'budget'] <- 4
+full_data_subset[3594, 'budget'] <- 25
+full_data_subset[3619, 'budget'] <- 500
+full_data_subset[3831, 'budget'] <- 3
+full_data_subset[3935, 'budget'] <- 500
+full_data_subset[4049, 'budget'] <- 995946
+full_data_subset[4424, 'budget'] <- 3
+full_data_subset[4460, 'budget'] <- 8
+full_data_subset[4555, 'budget'] <- 1200000
+full_data_subset[4624, 'budget'] <- 30
+full_data_subset[4645, 'budget'] <- 500
+full_data_subset[4709, 'budget'] <- 450
+full_data_subset[4839, 'budget'] <- 7
+full_data_subset[3125, 'budget'] <- 25
+full_data_subset[3142, 'budget'] <- 1
+full_data_subset[3201, 'budget'] <- 450
+full_data_subset[3222, 'budget'] <- 6
+full_data_subset[3545, 'budget'] <- 38
+full_data_subset[3670, 'budget'] <- 18
+full_data_subset[3792, 'budget'] <- 19
+full_data_subset[3881, 'budget'] <- 7
+full_data_subset[3969, 'budget'] <- 400
+full_data_subset[4196, 'budget'] <- 6
+full_data_subset[4221, 'budget'] <- 11
+full_data_subset[4222, 'budget'] <- 500
+full_data_subset[4285, 'budget'] <- 11
+full_data_subset[4319, 'budget'] <- 1
+full_data_subset[4639, 'budget'] <- 10
+full_data_subset[4719, 'budget'] <- 45
+full_data_subset[4822, 'budget'] <- 22
+full_data_subset[4829, 'budget'] <- 20
+full_data_subset[4969, 'budget'] <- 20
+full_data_subset[5021, 'budget'] <- 40
+full_data_subset[5035, 'budget'] <- 1
+full_data_subset[5063, 'budget'] <- 14
+full_data_subset[5119, 'budget'] <- 2
+full_data_subset[5214, 'budget'] <- 30
+full_data_subset[5221, 'budget'] <- 50
+full_data_subset[4903, 'budget'] <- 15
+full_data_subset[4983, 'budget'] <- 3
+full_data_subset[5102, 'budget'] <- 28
+full_data_subset[5217, 'budget'] <- 75
+full_data_subset[5224, 'budget'] <- 3
+full_data_subset[5469, 'budget'] <- 20
+full_data_subset[5840, 'budget'] <- 1
+full_data_subset[5960, 'budget'] <- 30
+full_data_subset[6506, 'budget'] <- 11
+full_data_subset[6553, 'budget'] <- 280
+full_data_subset[6561, 'budget'] <- 7
+full_data_subset[6582, 'budget'] <- 218
+full_data_subset[6638, 'budget'] <- 5
+full_data_subset[6749, 'budget'] <- 8
+full_data_subset[6759, 'budget'] <- 50
+full_data_subset[6856, 'budget'] <- 10
+full_data_subset[6858, 'budget'] <- 100
+full_data_subset[6876, 'budget'] <- 250
+full_data_subset[6972, 'budget'] <- 1
+full_data_subset[7079, 'budget'] <- 8000000
+full_data_subset[7150, 'budget'] <- 118
+full_data_subset[6506, 'budget'] <- 118
+full_data_subset[7225, 'budget'] <- 6
+full_data_subset[7231, 'budget'] <- 85
+full_data_subset[5222, 'budget'] <- 5
+full_data_subset[5322, 'budget'] <- 90
+full_data_subset[5350, 'budget'] <- 70
+full_data_subset[5378, 'budget'] <- 10
+full_data_subset[5545, 'budget'] <- 80
+full_data_subset[5810, 'budget'] <- 8
+full_data_subset[5926, 'budget'] <- 300
+full_data_subset[5927, 'budget'] <- 4
+full_data_subset[5986, 'budget'] <- 1
+full_data_subset[6053, 'budget'] <- 20
+full_data_subset[6104, 'budget'] <- 1
+full_data_subset[6130, 'budget'] <- 30
+full_data_subset[6301, 'budget'] <- 150
+full_data_subset[6276, 'budget'] <- 100
+full_data_subset[6473, 'budget'] <- 100
+full_data_subset[6842, 'budget'] <- 30
+```
+
+Lets log transform our variables with skewed distributions.
+```{r}
+full_data_subset <- mutate(full_data_subset,
+                           budget = log10(budget + 1),
+                           year_released = log10(year_released),
+                           popularity = log10(popularity + 1),
+                           revenue = log10(revenue + 1))
+```
+
+For budget we have 2023 NAs. We will use a linear model to predict these values. 
+```{r}
+# Create linear model to predict budget. 
+lm_budget <- lm(budget ~ number_of_cast + number_of_crew + year_released +
+                   popularity + runtime + number_of_genres + prod_comp_id +
+                   main_genre, 
+                data = full_data_subset, na.action = na.omit)
+
+# Predict all NAs in budget with lm_budget.
+full_data_subset$budget[is.na(full_data_subset$budget)] <- predict(lm_budget)
+```
+
+<br>
+
+## Final preparations
+
+Lets create a last variable using budget divided by year of release. It might hold important information regarding the effect of year on budget. 
+```{r}
+full_data_subset$budget_year_ratio <- full_data_subset$budget/full_data_subset$year_released
+```
+
+Correct variable types. 
+```{r}
+full_data_subset <- full_data_subset %>% mutate_if(is.character, as.factor)
+full_data_subset$weekday_released <- factor(full_data_subset$weekday_release, ordered = FALSE)
+full_data_subset$month_released <- factor(full_data_subset$month_released, ordered = FALSE)
+full_data_subset$quarter_released <- factor(full_data_subset$quarter_released)
+```
+
+Split `full_data_subset` back into train and test data sets. 
+```{r}
+train <- full_data_subset[1:3000,]
+test <- full_data_subset[3001:7398,]
+```
+
+<br>
+
+# Machine Learning
+
+We will now begin our machine learning using **Random Forest**.
+
+Set a random seed for reproducability of results and create random forest model. 
+```{r}
+set.seed(222)
+
+rf_model <- randomForest(revenue ~ .,
+                         data = train, 
+                         ntree = 501,
+                         replace = TRUE,
+                         nodesize = 9,
+                         importance = TRUE); print(rf_model)
+```
+
+Here we can see our mean of squared residuals and the percentage variance explained by our model.
+
+<br>
+
+## Importance of variables
+
+Lets create a plot to visualize our variables by importance. 
+```{r out.width=c('100%')}
+# Create an object for importance of variables
+importance <- importance(rf_model) 
+
+# Create data frame using importance. 
+varImportance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[,'IncNodePurity'], 0))
+
+# Create interactive plot.  
+ggplotly(ggplot(varImportance, aes(x = reorder(Variables, Importance), 
+                           y = Importance, fill = Importance)) +
+       geom_bar(stat='identity') + 
+       labs(title = 'Importance of predictors', x = 'Predictors', y = 'rmsle') +
+       coord_flip() + 
+       theme_light())
+```
+
+Here we can see our variables by importance. It looks like *popularity* and *budget* are the most important variables in our model followed by a slew of the variables that we created. This plot is interactive so run your mouse over the bars for more information about them.
+
+<br>
+
+# Prediction
+
+Now that we have created our model, we will use it to predict revenue on a test data set.  
+
+Run prediction with the test data. 
+```{r}
+prediction <- predict(rf_model, test)
+```
+
+Save the solution to a data frame with two columns: id and revenue.
+```{r}
+solution <- data.frame(id = full_data[3001:7398,]$id, revenue = prediction)
+```
+
+Reverse the log transformation of revenue before exporting the solution. 
+```{r}
+solution <- as_tibble(solution) %>%
+   mutate(revenue = 10^revenue)
+```
+
+Lastly, lets write the solution to file.
+```{r}
+write.csv(solution, file = 'Box_office_prediction.csv', row.names = F)
+```
+
+
