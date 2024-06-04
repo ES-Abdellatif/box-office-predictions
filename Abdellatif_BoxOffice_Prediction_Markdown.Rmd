@@ -3,14 +3,13 @@ title: "Box office Revenue Predictions using Random Forest"
 author: "Emad Abdellatif"
 date: "May 23, 2024"
 output:
+  pdf_document:
+    toc: true
   html_document:
     df_print: default
     highlight: tango
     theme: readable
     toc: true
-  pdf_document:
-    toc: true
-    always_allow_html: true
 ---
 
 ```{r setup, include = FALSE}
@@ -37,11 +36,14 @@ library(gridExtra) # Grids for visualizations
 library(VIM) # Visualizing missing values
 library(lubridate) # Working with dates
 library(randomForest) # Classification algorithm
+library(tinytex)
+library(webshot2)
 ```
 
 Read in the train and test data sets and then bind the two sets using `bind_rows()` from the DPLYR package. We will do all feature engineering and data preparation on both data sets and then divide our data into train and test sets again later before creating our model.
 ```{r}
-setwd("C:/Users/Emad Abdellatif/Desktop/Data Science Projects/Movies-Box-Office")
+#setwd("C:/Users/Emad Abdellatif/Desktop/Data Science Projects/Movies-Box-Office")
+setwd("/Users/emadabdellatif/Documents/Projects/box-office-predictions")
 train_data = read.csv('train.csv', na.strings=c("", '#N/A', '[]', '0'))
 test_data = read.csv('test.csv', na.strings=c("", '#N/A', '[]', '0'))
 
@@ -1203,6 +1205,7 @@ Here we can see our mean of squared residuals and the percentage variance explai
 
 Lets create a plot to visualize our variables by importance. 
 ```{r out.width=c('100%')}
+knitr::opts_chunk$set(echo = TRUE)
 # Create an object for importance of variables
 importance <- importance(rf_model) 
 
@@ -1211,12 +1214,13 @@ varImportance <- data.frame(Variables = row.names(importance),
                             Importance = round(importance[,'IncNodePurity'], 0))
 
 # Create interactive plot.  
-ggplotly(ggplot(varImportance, aes(x = reorder(Variables, Importance), 
+#ggplotly(
+  ggplot(varImportance, aes(x = reorder(Variables, Importance), 
                            y = Importance, fill = Importance)) +
        geom_bar(stat='identity') + 
        labs(title = 'Importance of predictors', x = 'Predictors', y = 'rmsle') +
        coord_flip() + 
-       theme_light())
+       theme_light()#)
 ```
 
 Here we can see our variables by importance. It looks like *popularity* and *budget* are the most important variables in our model followed by a slew of the variables that we created. This plot is interactive so run your mouse over the bars for more information about them.
