@@ -2,7 +2,7 @@
 This project aims to predict the box office revenue of movies using machine learning techniques.
 The main focus is on utilizing the Random Forest algorithm to build a predictive model based on various features extracted from movie data.
 
-This 'README' serves as an overall summary of the project and findings. 
+This `README` serves as an overall summary of the project and findings. 
 
 ## Goals of the Project
   1. ### Exploratory Data Analysis (EDA):
