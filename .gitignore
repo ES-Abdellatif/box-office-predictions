@@ -1,4 +1,5 @@
 # ignore test.csv file
+train.csv
 test.csv
 Archive
 .Rhistory
