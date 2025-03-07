@@ -42,8 +42,8 @@ library(webshot2)
 
 Read in the train and test data sets and then bind the two sets using `bind_rows()` from the DPLYR package. We will do all feature engineering and data preparation on both data sets and then divide our data into train and test sets again later before creating our model.
 ```{r}
-#setwd("C:/Users/Emad Abdellatif/Desktop/Data Science Projects/Movies-Box-Office")
-setwd("/Users/emadabdellatif/Documents/Projects/box-office-predictions")
+setwd("C:/Users/Emad Abdellatif/Desktop/Data Science Projects/box-office-predictions")
+#setwd("/Users/emadabdellatif/Documents/Projects/box-office-predictions")
 train_data = read.csv('train.csv', na.strings=c("", '#N/A', '[]', '0'))
 test_data = read.csv('test.csv', na.strings=c("", '#N/A', '[]', '0'))
 
