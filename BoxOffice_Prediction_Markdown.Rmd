@@ -958,8 +958,8 @@ full_data_subset <- subset(full_data,
                      weekday_released, number_of_keywords, number_of_prod_companies,
                      number_of_genres, title_length, tagline_length, number_of_cast,
                      number_of_crew, female_cast, male_cast, female_crew, male_crew,
-                   # number_of_prod_countries, number_of_spoken_languages,
-                   # imdb_id_2, overview_length, unspecified_cast, unspecified_crew,
+                     number_of_prod_countries, number_of_spoken_languages,
+                     imdb_id_2, overview_length, unspecified_cast, unspecified_crew,
                       revenue))
 ```
 
